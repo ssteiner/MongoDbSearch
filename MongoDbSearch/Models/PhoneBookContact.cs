@@ -22,7 +22,7 @@
 
         public List<string> SecretaryIds { get; set; }
 
-        public string? ManagerId { get; set; }
+        public string ManagerId { get; set; }
 
         public PhoneBookContact Manager { get; set; }
 

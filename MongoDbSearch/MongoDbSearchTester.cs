@@ -5,12 +5,14 @@ using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using MongoDB.Driver.Linq;
 using MongoDbSearch.Models;
+using System.ComponentModel;
+using System.Data;
 
 namespace MongoDbSearch
 {
     internal class MongoDbSearchTester
     {
-        private readonly string connectionString = "";
+        private readonly string connectionString = "mongodb+srv://dbadmin:hQX0qfDVZVkjnd02@devcluster0.ud60tg0.mongodb.net/?retryWrites=true&w=majority&appName=DevCluster0";
         private readonly string databaseName = "MongoDbSearch";
         private readonly string collectionName = "phoneBookContacts";
 
@@ -35,7 +37,8 @@ namespace MongoDbSearch
                 Location = "Züri",
                 Numbers = [
                     new PhoneBookContactNumber { Id = ObjectId.GenerateNewId().ToString(), Number = "+41587770005", Type = NumberType.Office },
-                ]
+                ], 
+                LastUpdate = DateTime.Now
             };
             secretary = new()
             {
@@ -95,18 +98,42 @@ namespace MongoDbSearch
                 col.InsertOne(contact2);
                 rollbackObjects.Add(contact2);
 
+                Type propType = typeof(PhoneBookContact).GetProperty(nameof(PhoneBookContact.LastUpdate)).PropertyType;
+               
+                var managerWithEmptyLastUpdate = Builders<PhoneBookContact>.Filter.Eq(nameof(PhoneBookContact.LastUpdate), (DateTime?)null);
+
+
+                TypeConverter conv = TypeDescriptor.GetConverter(propType);
+                object? convertedValue = conv.ConvertFrom(null);
+
+                managerWithEmptyLastUpdate = Builders<PhoneBookContact>.Filter.Eq(nameof(PhoneBookContact.LastUpdate), propType.IsValueType ? Activator.CreateInstance(propType): null);
+
+                var managersWithNoUpdate = col.AsQueryable().Where(x => managerWithEmptyLastUpdate.Inject()).ToList();
+
+                var managerWithLastUpdate = Builders<PhoneBookContact>.Filter.Ne(nameof(PhoneBookContact.LastUpdate), (DateTime?)null);
+                managerWithLastUpdate = Builders<PhoneBookContact>.Filter.Ne(nameof(PhoneBookContact.LastUpdate), new PhoneBookContact().LastUpdate);
+                managerWithLastUpdate = Builders<PhoneBookContact>.Filter.Ne(nameof(PhoneBookContact.LastUpdate), propType.IsValueType ? Activator.CreateInstance(propType) : null);
+
+                var managersWithUpdate = col.AsQueryable().Where(x => managerWithLastUpdate.Inject()).ToList();
+
                 // get all PhoneBookContacts whose ManagerId property is not null. Should return contact1
-                var managerIdEmptyFilter = Builders<PhoneBookContact>.Filter.Ne(nameof(PhoneBookContact.ManagerId), BsonNull.Value);
+
+                propType = typeof(PhoneBookContact).GetProperty(nameof(PhoneBookContact.ManagerId)).PropertyType;
+
+                var managerIdEmptyFilter = Builders<PhoneBookContact>.Filter.Eq(nameof(PhoneBookContact.ManagerId), (string)null);
+                managerIdEmptyFilter = Builders<PhoneBookContact>.Filter.Eq(nameof(PhoneBookContact.ManagerId), propType.IsValueType ? Activator.CreateInstance(propType) : null);
 
                 var contactsWithEmptyManagerFromDb = col.AsQueryable().Where(x => managerIdEmptyFilter.Inject()).ToList();
+
                 var actualContactsWithEmptyManager = inMemoryCollection.Where(u => u.ManagerId == null).ToList();
                 if (contactsWithEmptyManagerFromDb.Count == actualContactsWithEmptyManager.Count)
                     Log($"Proper number of contacts with empty manager returned from database");
                 else
                     Log($"Search returned the wrong number of contacts with an empty manager: nb returned {contactsWithEmptyManagerFromDb}, expected: {actualContactsWithEmptyManager.Count}");
 
-                // get all PhoneBookContacts whose ManagerId property is null. Should return conctact2, manager, secretary
-                var managerIdNotEmptyFilter = Builders<PhoneBookContact>.Filter.Eq(nameof(PhoneBookContact.ManagerId), BsonNull.Value);
+                // get all PhoneBookContacts whose ManagerId property is null. Should return contact2, manager, secretary
+                var managerIdNotEmptyFilter = Builders<PhoneBookContact>.Filter.Ne(nameof(PhoneBookContact.ManagerId), (string)null);
+                managerIdNotEmptyFilter = Builders<PhoneBookContact>.Filter.Ne(nameof(PhoneBookContact.ManagerId), propType.IsValueType ? Activator.CreateInstance(propType) : null);
 
                 var contactsWithNonEmptyManagerFromDb = col.AsQueryable().Where(x => managerIdNotEmptyFilter.Inject()).ToList();
                 var actualContactsWithNonEmptyManager = inMemoryCollection.Where(u => u.ManagerId != null).ToList();
@@ -126,6 +153,56 @@ namespace MongoDbSearch
                     var idsToDelete = rollbackObjects.Select(x => x.Id).ToList();
                     col.DeleteMany(u => idsToDelete.Contains(u.Id));
                 }
+            }
+        }
+
+        public static T GetValue<T>(object value, string fieldName)
+        {
+            Type t = typeof(T);
+            t = Nullable.GetUnderlyingType(t) ?? t;
+
+            return (value == null || DBNull.Value.Equals(value)) ?
+                default(T) : (T)Convert.ChangeType(value, t);
+        }
+
+        internal void RestaurantSearchTest()
+        {
+            MongoClient? client = null;
+            IMongoCollection<Restaurant>? restaurants = null;
+            IMongoCollection<Review>? reviews = null;
+            try
+            {
+                client = new MongoClient(settings);
+                var db = client.GetDatabase(databaseName);
+                restaurants = db.GetCollection<Restaurant>(collectionName);
+                reviews = db.GetCollection<Review>(collectionName);
+
+                var rest1 = new Restaurant { Name = "La Nonna", Cuisine = "italian", Id = ObjectId.GenerateNewId(), RestaurantId = "123456" };
+
+                restaurants.InsertOne(rest1);
+
+                var review1 = new Review { Id = ObjectId.GenerateNewId(), RestaurantName = rest1.Name, Reviewer = "user_1", ReviewText = "great" };
+                var review2 = new Review { Id = ObjectId.GenerateNewId(), RestaurantName = rest1.Name, Reviewer = "user_2", ReviewText = "fantastic pizza" };
+
+                reviews.InsertMany([review1, review2]);
+
+                var queryableCollection = restaurants.AsQueryable();
+                var reviewCollection = reviews.AsQueryable();
+
+                var query = queryableCollection
+                    .GroupJoin(reviewCollection,
+                    restaurant => restaurant.Name,
+                    review => review.RestaurantName,
+                    (restaurant, reviews) =>
+                        new { Restaurant = restaurant, Reviews = reviews }
+                    );
+
+                var restaurantsWithReviews = query.ToList();
+
+            }
+            finally
+            {
+
             }
         }
 
